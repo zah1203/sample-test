@@ -1,4 +1,23 @@
+############################
+# Default VPC
+############################
+data "aws_vpc" "default" {
+  default = true
+}
+
+############################
+# Default subnets (required for EC2)
+############################
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+############################
 # Latest Amazon Linux 2023 AMI
+############################
 data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
@@ -14,10 +33,13 @@ data "aws_ami" "al2023" {
   }
 }
 
+############################
 # Security Group
+############################
 resource "aws_security_group" "ec2_sg" {
-  name   = "${var.name}-sg"
-  vpc_id = var.vpc_id
+  name        = "${var.name}-sg"
+  description = "Security group for EC2 instance"
+  vpc_id      = data.aws_vpc.default.id
 
   egress {
     from_port   = 0
@@ -41,11 +63,14 @@ resource "aws_security_group" "ec2_sg" {
   }
 }
 
-# IAM role for SSM
+############################
+# IAM assume role policy for EC2
+############################
 data "aws_iam_policy_document" "assume_ec2" {
   statement {
     effect  = "Allow"
     actions = ["sts:AssumeRole"]
+
     principals {
       type        = "Service"
       identifiers = ["ec2.amazonaws.com"]
@@ -53,6 +78,9 @@ data "aws_iam_policy_document" "assume_ec2" {
   }
 }
 
+############################
+# IAM Role for SSM
+############################
 resource "aws_iam_role" "ssm_role" {
   name               = "${var.name}-ssm-role"
   assume_role_policy = data.aws_iam_policy_document.assume_ec2.json
@@ -68,28 +96,17 @@ resource "aws_iam_instance_profile" "ssm_profile" {
   role = aws_iam_role.ssm_role.name
 }
 
+############################
 # EC2 Instance
+############################
 resource "aws_instance" "this" {
-  ami                         = data.aws_ami.al2023.id
-  instance_type               = var.instance_type
-  subnet_id                   = var.subnet_id
-  vpc_security_group_ids       = [aws_security_group.ec2_sg.id]
-  associate_public_ip_address = var.associate_public_ip
+  ami                    = data.aws_ami.al2023.id
+  instance_type          = var.instance_type
+  subnet_id              = data.aws_subnets.default.ids[0]
+  vpc_security_group_ids = [aws_security_group.ec2_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
 
-  iam_instance_profile = aws_iam_instance_profile.ssm_profile.name
-  key_name             = var.enable_ssh ? var.key_name : null
-
-  root_block_device {
-    volume_size           = var.root_volume_size_gb
-    volume_type           = "gp3"
-    delete_on_termination = true
-  }
-
-  metadata_options {
-    http_tokens = "required"
-  }
-
-  tags = merge(var.tags, {
+  tags = {
     Name = var.name
-  })
+  }
 }
